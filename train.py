@@ -161,6 +161,8 @@ def train(
         step_start_time = time.time()
 
         print("--- Phase 1: Pre-training Harness Started ---", flush=True)
+        print("Evaluating initial baseline validation loss (Step 0)...", flush=True)
+
         for step in range(start_step, max_steps + 1):
             lr = get_lr(step, warmup_steps, max_steps, learning_rate, min_lr)
             for param_group in optimizer.param_groups:
@@ -190,20 +192,20 @@ def train(
             current_tokens = step * tokens_per_step
             epoch = (current_tokens / tokens_per_epoch) + 1.0
 
-            # Step level frequent logging
-            if step % log_interval == 0 and step > 0:
+            # Frequent logging every step
+            if step % log_interval == 0:
                 dt = time.time() - step_start_time
-                tok_per_sec = (tokens_per_step * log_interval) / max(dt, 1e-5)
+                tok_per_sec = tokens_per_step / max(dt, 1e-5)
                 print(
                     f"Epoch {epoch:.2f} | Step {step:5d}/{max_steps} | "
                     f"Train Loss: {loss.item():.4f} | LR: {lr:.6f} | "
-                    f"Speed: {tok_per_sec:.0f} tok/s | Step Time: {dt/log_interval:.2f}s",
+                    f"Speed: {tok_per_sec:.0f} tok/s ({dt:.2f}s/step)",
                     flush=True,
                 )
                 step_start_time = time.time()
 
             # Validation Evaluation Logging
-            if step % eval_interval == 0 or step == max_steps:
+            if step > 0 and (step % eval_interval == 0 or step == max_steps):
                 val_loss, val_ppl = evaluate(model, val_loader, eval_iters=10)
                 print(
                     f"\n>>> EVALUATION at Step {step}/{max_steps} (Epoch {epoch:.2f}) <<<\n"
@@ -238,7 +240,7 @@ def main():
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Directory to save model checkpoints.")
     parser.add_argument("--max_steps", type=int, default=10000, help="Total training steps.")
     parser.add_argument("--eval_interval", type=int, default=100, help="Steps between validation evaluations.")
-    parser.add_argument("--log_interval", type=int, default=10, help="Steps between frequent training logs.")
+    parser.add_argument("--log_interval", type=int, default=1, help="Steps between frequent training logs.")
     parser.add_argument("--save_interval", type=int, default=500, help="Steps between checkpoint saves.")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size per step.")
     parser.add_argument("--lr", type=float, default=6e-4, help="Peak learning rate.")
@@ -259,6 +261,7 @@ def main():
         learning_rate=args.lr,
         resume_checkpoint=args.resume,
     )
+
 
 
 if __name__ == "__main__":
