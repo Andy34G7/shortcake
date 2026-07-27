@@ -13,8 +13,6 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "torch>=2.2.0",
-        "causal-conv1d>=1.2.0",
-        "mamba-ssm>=1.2.0",
         "tokenizers>=0.15.0",
         "datasets>=2.16.0",
         "transformers>=4.36.0",
@@ -85,11 +83,22 @@ def train_remote(max_steps: int = 10000, batch_size: int = 16, lr: float = 6e-4)
     print(" Training complete! Checkpoints saved and committed to Modal Volume.")
 
 
+@app.function(image=image, volumes={VOLUME_DIR: volume})
+def download_checkpoint_remote(filename: str = "best_model.pt") -> bytes:
+    """Fetches a checkpoint file directly from Modal Volume."""
+    filepath = f"{VOLUME_DIR}/checkpoints/{filename}"
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Checkpoint {filename} not found in Modal volume.")
+    with open(filepath, "rb") as f:
+        return f.read()
+
+
 @app.local_entrypoint()
 def main(
     action: str = "train",
     max_steps: int = 10000,
     batch_size: int = 16,
+    checkpoint: str = "best_model.pt",
 ):
     """Modal CLI local entrypoint."""
     if action == "prepare":
@@ -98,5 +107,13 @@ def main(
     elif action == "train":
         print(f"Launching Training on Modal GPU (A10G)...")
         train_remote.remote(max_steps=max_steps, batch_size=batch_size)
+    elif action == "download":
+        os.makedirs("checkpoints", exist_ok=True)
+        print(f"Downloading '{checkpoint}' from Modal Volume...")
+        content = download_checkpoint_remote.remote(checkpoint)
+        local_path = os.path.join("checkpoints", checkpoint)
+        with open(local_path, "wb") as f:
+            f.write(content)
+        print(f" Downloaded {len(content):,} bytes to {local_path}")
     else:
-        print("Invalid action! Use 'prepare' or 'train'.")
+        print("Invalid action! Use 'prepare', 'train', or 'download'.")
