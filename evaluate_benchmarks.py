@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple
 from transformers import AutoModelForCausalLM, AutoModel, AutoTokenizer
 
 from config import ModelConfig
-from model import SmolHybridCoder
+from model import Shortcake
 
 
 def benchmark_throughput_vs_seq_len(
@@ -21,8 +21,9 @@ def benchmark_throughput_vs_seq_len(
     
     # 1. Shortcake (~20M Hybrid Mamba-Transformer)
     config = ModelConfig(vocab_size=16384, d_model=384, n_layer=8, n_head=6)
-    shortcake = SmolHybridCoder(config).to(device)
+    shortcake = Shortcake(config).to(device)
     shortcake.eval()
+
 
     results = {
         "Shortcake (~20M)": [],
