@@ -26,6 +26,7 @@ except ImportError:
     selective_scan_fn = None
 
 
+@torch.jit.script
 def selective_scan_pytorch(
     u: torch.Tensor,        # (B, D, L)
     delta: torch.Tensor,    # (B, D, L)
@@ -34,47 +35,36 @@ def selective_scan_pytorch(
     C: torch.Tensor,        # (B, N, L)
     D: Optional[torch.Tensor] = None, # (D,)
 ) -> torch.Tensor:
-    """Pure PyTorch native selective scan algorithm for Mamba SSM.
-    
-    u: (B, D, L)
-    delta: (B, D, L)
-    A: (D, N)
-    B: (B, N, L)
-    C: (B, N, L)
-    D: (D,)
-    Returns: (B, D, L)
-    """
+    """TorchScript JIT-compiled selective scan algorithm for fast CPU execution."""
     b, d, l = u.shape
     n = A.shape[1]
 
-    # Discretize A and B:
-    # delta: (B, D, L) -> (B, D, L, 1)
-    # A: (D, N) -> (1, D, 1, N)
-    deltaA = torch.exp(delta.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(2)) # (B, D, L, N)
-    
-    # delta: (B, D, L, 1)
-    # B: (B, 1, L, N)
-    # u: (B, D, L, 1)
-    deltaB_u = delta.unsqueeze(-1) * B.permute(0, 2, 1).unsqueeze(1) * u.unsqueeze(-1) # (B, D, L, N)
+    x = torch.zeros((b, d, n), device=u.device, dtype=u.dtype)
+    ys = torch.empty((b, d, l), device=u.device, dtype=u.dtype)
 
-    # Recurrent scan loop across sequence length L
-    x = torch.zeros(b, d, n, device=u.device, dtype=u.dtype)
-    ys = []
-    
-    C_perm = C.permute(0, 2, 1) # (B, L, N)
+    delta_t = delta.transpose(1, 2) # (B, L, D)
+    u_t = u.transpose(1, 2)         # (B, L, D)
+    B_t = B.transpose(1, 2)         # (B, L, N)
+    C_t = C.transpose(1, 2)         # (B, L, N)
+    A_exp = A.unsqueeze(0)          # (1, D, N)
 
     for i in range(l):
-        x = deltaA[:, :, i, :] * x + deltaB_u[:, :, i, :] # (B, D, N)
-        # y_i = sum_n (x_i * C_i)
-        y_i = torch.einsum("bdn,bn->bd", x, C_perm[:, i, :]) # (B, D)
-        ys.append(y_i)
+        dt_i = delta_t[:, i, :].unsqueeze(-1) # (B, D, 1)
+        u_i = u_t[:, i, :].unsqueeze(-1)     # (B, D, 1)
+        B_i = B_t[:, i, :].unsqueeze(1)      # (B, 1, N)
+        C_i = C_t[:, i, :]                   # (B, N)
 
-    y = torch.stack(ys, dim=-1) # (B, D, L)
+        deltaA_i = torch.exp(dt_i * A_exp)   # (B, D, N)
+        deltaB_u_i = dt_i * B_i * u_i        # (B, D, N)
+
+        x = deltaA_i * x + deltaB_u_i
+        ys[:, :, i] = torch.sum(x * C_i.unsqueeze(1), dim=-1)
 
     if D is not None:
-        y = y + u * D.unsqueeze(-1)
+        ys = ys + u * D.unsqueeze(-1)
 
-    return y
+    return ys
+
 
 
 class MambaBlock(nn.Module):
