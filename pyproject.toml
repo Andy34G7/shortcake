@@ -15,7 +15,9 @@ dependencies = [
     "accelerate>=0.25.0",
     "matplotlib>=3.7.0",
     "pytest>=7.4.0",
+    "modal>=0.60.0",
 ]
+
 
 
 [build-system]

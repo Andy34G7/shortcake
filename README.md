@@ -69,6 +69,28 @@ To resume from the latest saved checkpoint:
 python train.py --resume checkpoints/latest.pt
 ```
 
+### 4. Run Cloud GPU Training on Modal
+
+To train Shortcake on cloud GPUs (Nvidia A10G / T4 / A100) using **Modal**:
+
+1. Install and authenticate Modal:
+```bash
+uv pip install modal
+modal setup
+```
+
+2. Run Data Preparation on Modal Volume:
+```bash
+modal run train_modal.py --action prepare
+```
+
+3. Launch High-Speed GPU Pre-Training:
+```bash
+modal run train_modal.py --action train --max-steps 10000 --batch-size 16
+```
+
+---
+
 ### 5. Generate Code Completions
 
 Sample code generation from your best trained checkpoint:
@@ -82,4 +104,5 @@ Verify architecture, tokenizer, training step loss reduction, and SPLADE head:
 ```bash
 python test_suite.py
 ```
+
 
