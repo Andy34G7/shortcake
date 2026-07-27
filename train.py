@@ -33,11 +33,11 @@ class BinaryMemmapDataLoader:
             raise ValueError(f"Dataset in file has insufficient tokens ({len(self.data)}) for block size {self.block_size}.")
 
         ix = np.random.randint(0, max_idx, size=self.batch_size)
-        x_stack = [self.data[i : i + self.block_size].astype(np.int64) for i in ix]
-        y_stack = [self.data[i + 1 : i + 1 + self.block_size].astype(np.int64) for i in ix]
+        x_np = np.stack([self.data[i : i + self.block_size] for i in ix]).astype(np.int64)
+        y_np = np.stack([self.data[i + 1 : i + 1 + self.block_size] for i in ix]).astype(np.int64)
 
-        x = torch.tensor(np.array(x_stack), dtype=torch.long, device=self.device)
-        y = torch.tensor(np.array(y_stack), dtype=torch.long, device=self.device)
+        x = torch.from_numpy(x_np).to(self.device, non_blocking=True)
+        y = torch.from_numpy(y_np).to(self.device, non_blocking=True)
         return x, y
 
 
@@ -192,14 +192,16 @@ def train(
             current_tokens = step * tokens_per_step
             epoch = (current_tokens / tokens_per_epoch) + 1.0
 
-            # Frequent logging every step
+            # Frequent logging every log_interval steps
             if step % log_interval == 0:
                 dt = time.time() - step_start_time
-                tok_per_sec = tokens_per_step / max(dt, 1e-5)
+                steps_logged = log_interval if step > start_step else 1
+                sec_per_step = dt / steps_logged
+                tok_per_sec = (tokens_per_step * steps_logged) / max(dt, 1e-5)
                 print(
                     f"Epoch {epoch:.2f} | Step {step:5d}/{max_steps} | "
                     f"Train Loss: {loss.item():.4f} | LR: {lr:.6f} | "
-                    f"Speed: {tok_per_sec:.0f} tok/s ({dt:.2f}s/step)",
+                    f"Speed: {tok_per_sec:.0f} tok/s ({sec_per_step:.2f}s/step)",
                     flush=True,
                 )
                 step_start_time = time.time()

@@ -13,6 +13,8 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "torch>=2.2.0",
+        "causal-conv1d>=1.2.0",
+        "mamba-ssm>=1.2.0",
         "tokenizers>=0.15.0",
         "datasets>=2.16.0",
         "transformers>=4.36.0",
