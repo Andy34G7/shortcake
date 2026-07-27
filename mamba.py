@@ -26,7 +26,6 @@ except ImportError:
     selective_scan_fn = None
 
 
-@torch.jit.script
 def selective_scan_pytorch(
     u: torch.Tensor,        # (B, D, L)
     delta: torch.Tensor,    # (B, D, L)
@@ -35,7 +34,7 @@ def selective_scan_pytorch(
     C: torch.Tensor,        # (B, N, L)
     D: Optional[torch.Tensor] = None, # (D,)
 ) -> torch.Tensor:
-    """TorchScript JIT-compiled selective scan algorithm for fast CPU execution."""
+    """TorchScript memory-efficient selective scan algorithm."""
     b, d, l = u.shape
     n = A.shape[1]
 
@@ -55,7 +54,7 @@ def selective_scan_pytorch(
         C_i = C_t[:, i, :]                   # (B, N)
 
         deltaA_i = torch.exp(dt_i * A_exp)   # (B, D, N)
-        deltaB_u_i = dt_i * B_i * u_i        # (B, D, N)
+        deltaB_u_i = (dt_i * u_i) * B_i      # (B, D, N)
 
         x = deltaA_i * x + deltaB_u_i
         ys[:, :, i] = torch.sum(x * C_i.unsqueeze(1), dim=-1)
@@ -64,6 +63,7 @@ def selective_scan_pytorch(
         ys = ys + u * D.unsqueeze(-1)
 
     return ys
+
 
 
 
@@ -111,6 +111,9 @@ class MambaBlock(nn.Module):
         nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
 
         # Initialize dt_proj bias such that softplus(dt_proj.bias) ~ dt_init
+        self._reset_dt_bias()
+
+    def _reset_dt_bias(self):
         dt_scale = 1.0
         dt_min = 0.001
         dt_max = 0.1
@@ -155,14 +158,19 @@ class MambaBlock(nn.Module):
         A = -torch.exp(self.A_log.float()) # (d_inner, d_state)
 
         # 4. Run Selective Scan
-        if HAS_MAMBA_CUDA and not self.training:
+        if HAS_MAMBA_CUDA:
             # Use fast CUDA kernel if present
             y = selective_scan_fn(
                 u, delta, A, B_ssm, C_ssm, self.D.float(), z=None, delta_bias=None, delta_softplus=False
             )
         else:
-            # Native PyTorch scan
-            y = selective_scan_pytorch(u, delta, A, B_ssm, C_ssm, self.D.float())
+            # Native PyTorch scan with gradient checkpointing during training to save VRAM
+            if self.training:
+                y = torch.utils.checkpoint.checkpoint(
+                    selective_scan_pytorch, u, delta, A, B_ssm, C_ssm, self.D.float(), use_reentrant=False
+                )
+            else:
+                y = selective_scan_pytorch(u, delta, A, B_ssm, C_ssm, self.D.float())
 
         # 5. Multiply by gate z (SiLU(z)) and project out
         y = y.transpose(1, 2) # (B, L, d_inner)

@@ -152,6 +152,11 @@ class Shortcake(nn.Module):
         # Initialize weights
         self.apply(self._init_weights)
 
+        # Re-apply Mamba dt_proj bias initialization (prevent zeroing by _init_weights)
+        for m in self.modules():
+            if isinstance(m, MambaBlock):
+                m._reset_dt_bias()
+
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
