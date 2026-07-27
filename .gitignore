@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Data & Tokenizer Cache
+data/*.bin
+data/*.json
+tokenizer.json
+tokenizer.model
+
+# Model Checkpoints & Logs
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+runs/
+wandb/
+.pytest_cache/
