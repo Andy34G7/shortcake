@@ -2,6 +2,7 @@ import os
 import time
 import math
 import argparse
+import traceback
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,11 +10,6 @@ from typing import Tuple, Optional, Dict
 
 from config import ModelConfig
 from model import Shortcake
-
-
-class BinaryMemmapDataLoader:
-    pass
-
 
 
 class BinaryMemmapDataLoader:
@@ -28,11 +24,15 @@ class BinaryMemmapDataLoader:
         self.batch_size = batch_size
         self.device = device
         self.total_tokens = len(self.data)
+        self.tokens_per_batch = block_size * batch_size
 
     def get_batch(self) -> Tuple[torch.Tensor, torch.Tensor]:
-
         """Fetch a random batch of input (x) and target (y) sequences."""
-        ix = np.random.randint(0, len(self.data) - self.block_size, size=self.batch_size)
+        max_idx = len(self.data) - self.block_size - 1
+        if max_idx <= 0:
+            raise ValueError(f"Dataset in file has insufficient tokens ({len(self.data)}) for block size {self.block_size}.")
+
+        ix = np.random.randint(0, max_idx, size=self.batch_size)
         x_stack = [self.data[i : i + self.block_size].astype(np.int64) for i in ix]
         y_stack = [self.data[i + 1 : i + 1 + self.block_size].astype(np.int64) for i in ix]
 
@@ -57,7 +57,7 @@ def get_lr(it: int, warmup_steps: int, max_steps: int, max_lr: float, min_lr: fl
 def evaluate(
     model: Shortcake,
     dataloader: BinaryMemmapDataLoader,
-    eval_iters: int = 50,
+    eval_iters: int = 10,
 ) -> Tuple[float, float]:
     """Evaluate model loss and perplexity on dataset split."""
     model.eval()
@@ -92,18 +92,18 @@ def save_checkpoint(
         "config": config,
     }
     torch.save(state, filepath)
-    print(f" Saved checkpoint to {filepath}")
-
+    print(f" Saved checkpoint to {filepath}", flush=True)
 
 
 def train(
     config: ModelConfig,
     data_dir: str = "data",
     checkpoint_dir: str = "checkpoints",
-    max_steps: int = 1000,
+    max_steps: int = 10000,
     eval_interval: int = 100,
-    save_interval: int = 200,
-    batch_size: int = 8,
+    log_interval: int = 10,
+    save_interval: int = 500,
+    batch_size: int = 4,
     learning_rate: float = 6e-4,
     min_lr: float = 6e-5,
     warmup_steps: int = 100,
@@ -112,111 +112,134 @@ def train(
     resume_checkpoint: Optional[str] = None,
 ):
     """Main training, validation, and test harness."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device == "cpu":
-        # Optimize CPU threads for DigitalOcean 2-vCPU Droplet
-        num_cpus = os.cpu_count() or 2
-        torch.set_num_threads(num_cpus)
-        print(f"Starting Shortcake (~20M) training on CPU ({num_cpus} threads)...")
-    else:
-        print(f"Starting Shortcake (~20M) training on CUDA device: {torch.cuda.get_device_name(0)}")
-
-
-    # Load Data Loaders
-    train_loader = BinaryMemmapDataLoader(os.path.join(data_dir, "train.bin"), config.max_seq_len, batch_size, device)
-    val_loader = BinaryMemmapDataLoader(os.path.join(data_dir, "val.bin"), config.max_seq_len, batch_size, device)
-    test_loader = BinaryMemmapDataLoader(os.path.join(data_dir, "test.bin"), config.max_seq_len, batch_size, device)
-
-    # Initialize Model
-    model = Shortcake(config).to(device)
-    print(f"Model initialized: {model.get_num_params():,} non-embedding parameters.")
-
-
-    # Optimizer
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.95)
-    )
-
-    start_step = 0
-    best_val_loss = float("inf")
-
-    # Resume from existing checkpoint if requested
-    if resume_checkpoint and os.path.exists(resume_checkpoint):
-        print(f"Resuming training from checkpoint: {resume_checkpoint}")
-        ckpt = torch.load(resume_checkpoint, map_location=device)
-        model.load_state_dict(ckpt["model_state_dict"])
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-        start_step = ckpt["step"] + 1
-        best_val_loss = ckpt.get("val_loss", float("inf"))
-
-    # Scaler for AMP
-    scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
-
-    model.train()
-    start_time = time.time()
-
-    print("\n--- Phase 1: Pre-training Harness Started ---")
-    for step in range(start_step, max_steps + 1):
-        lr = get_lr(step, warmup_steps, max_steps, learning_rate, min_lr)
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
-
-        x, y = train_loader.get_batch()
-
-        optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast("cuda", enabled=(device == "cuda")):
-            outputs = model(x, targets=y, compute_jepa=config.jepa_enabled)
-            loss = outputs.get("total_loss", outputs["loss"])
-
-
-        if device == "cuda":
-            scaler.scale(loss).backward()
-            if grad_clip > 0.0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
+    try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cpu":
+            num_cpus = os.cpu_count() or 2
+            torch.set_num_threads(num_cpus)
+            print(f"Starting Shortcake (~20M) training on CPU ({num_cpus} threads)...", flush=True)
         else:
-            loss.backward()
-            if grad_clip > 0.0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
+            print(f"Starting Shortcake (~20M) training on CUDA device: {torch.cuda.get_device_name(0)}", flush=True)
 
-        # Validation & Logging
-        if step % eval_interval == 0 or step == max_steps:
-            val_loss, val_ppl = evaluate(model, val_loader, eval_iters=20)
-            dt = time.time() - start_time
-            print(
-                f"Step {step:5d}/{max_steps} | Train Loss: {loss.item():.4f} | "
-                f"Val Loss: {val_loss:.4f} | Val PPL: {val_ppl:.2f} | LR: {lr:.6f} | Time: {dt:.1f}s",
-                flush=True,
-            )
-            start_time = time.time()
+        # Load Data Loaders
+        train_loader = BinaryMemmapDataLoader(os.path.join(data_dir, "train.bin"), config.max_seq_len, batch_size, device)
+        val_loader = BinaryMemmapDataLoader(os.path.join(data_dir, "val.bin"), config.max_seq_len, batch_size, device)
+        test_loader = BinaryMemmapDataLoader(os.path.join(data_dir, "test.bin"), config.max_seq_len, batch_size, device)
 
-            # Save Best Model Checkpoint
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                save_checkpoint(checkpoint_dir, "best_model.pt", model, optimizer, step, val_loss, config)
+        tokens_per_epoch = train_loader.total_tokens
+        tokens_per_step = config.max_seq_len * batch_size
 
-        # Periodic Checkpoint Saving
-        if step > 0 and (step % save_interval == 0 or step == max_steps):
-            save_checkpoint(checkpoint_dir, f"checkpoint_step_{step}.pt", model, optimizer, step, loss.item(), config)
-            save_checkpoint(checkpoint_dir, "latest.pt", model, optimizer, step, loss.item(), config)
+        print(f"Dataset Loaded: {train_loader.total_tokens:,} training tokens.", flush=True)
+        print(f"Tokens per Step: {tokens_per_step:,} | Est. Steps per Epoch: {tokens_per_epoch // tokens_per_step:,}", flush=True)
 
+        # Initialize Model
+        model = Shortcake(config).to(device)
+        print(f"Model initialized: {model.get_num_params():,} non-embedding parameters.\n", flush=True)
 
-    # Final Test Evaluation
-    print("\n--- Final Test Evaluation Harness ---")
-    test_loss, test_ppl = evaluate(model, test_loader, eval_iters=50)
-    print(f" Final Test Loss: {test_loss:.4f} | Final Test Perplexity: {test_ppl:.2f}")
+        # Optimizer
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.95)
+        )
+
+        start_step = 0
+        best_val_loss = float("inf")
+
+        # Resume from existing checkpoint if requested
+        if resume_checkpoint and os.path.exists(resume_checkpoint):
+            print(f"Resuming training from checkpoint: {resume_checkpoint}", flush=True)
+            ckpt = torch.load(resume_checkpoint, map_location=device)
+            model.load_state_dict(ckpt["model_state_dict"])
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            start_step = ckpt["step"] + 1
+            best_val_loss = ckpt.get("val_loss", float("inf"))
+
+        # Scaler for AMP (CUDA only)
+        scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
+
+        model.train()
+        start_time = time.time()
+        step_start_time = time.time()
+
+        print("--- Phase 1: Pre-training Harness Started ---", flush=True)
+        for step in range(start_step, max_steps + 1):
+            lr = get_lr(step, warmup_steps, max_steps, learning_rate, min_lr)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
+
+            x, y = train_loader.get_batch()
+
+            optimizer.zero_grad(set_to_none=True)
+            with torch.amp.autocast("cuda", enabled=(device == "cuda")):
+                outputs = model(x, targets=y, compute_jepa=config.jepa_enabled)
+                loss = outputs.get("total_loss", outputs["loss"])
+
+            if device == "cuda":
+                scaler.scale(loss).backward()
+                if grad_clip > 0.0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                if grad_clip > 0.0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.step()
+
+            # Calculate Epoch Progress
+            current_tokens = step * tokens_per_step
+            epoch = (current_tokens / tokens_per_epoch) + 1.0
+
+            # Step level frequent logging
+            if step % log_interval == 0 and step > 0:
+                dt = time.time() - step_start_time
+                tok_per_sec = (tokens_per_step * log_interval) / max(dt, 1e-5)
+                print(
+                    f"Epoch {epoch:.2f} | Step {step:5d}/{max_steps} | "
+                    f"Train Loss: {loss.item():.4f} | LR: {lr:.6f} | "
+                    f"Speed: {tok_per_sec:.0f} tok/s | Step Time: {dt/log_interval:.2f}s",
+                    flush=True,
+                )
+                step_start_time = time.time()
+
+            # Validation Evaluation Logging
+            if step % eval_interval == 0 or step == max_steps:
+                val_loss, val_ppl = evaluate(model, val_loader, eval_iters=10)
+                print(
+                    f"\n>>> EVALUATION at Step {step}/{max_steps} (Epoch {epoch:.2f}) <<<\n"
+                    f"    Train Loss: {loss.item():.4f} | Val Loss: {val_loss:.4f} | Val Perplexity: {val_ppl:.2f}\n",
+                    flush=True,
+                )
+
+                # Save Best Model Checkpoint
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    save_checkpoint(checkpoint_dir, "best_model.pt", model, optimizer, step, val_loss, config)
+
+            # Periodic Checkpoint Saving
+            if step > 0 and (step % save_interval == 0 or step == max_steps):
+                save_checkpoint(checkpoint_dir, f"checkpoint_step_{step}.pt", model, optimizer, step, loss.item(), config)
+                save_checkpoint(checkpoint_dir, "latest.pt", model, optimizer, step, loss.item(), config)
+
+        # Final Test Evaluation
+        print("\n--- Final Test Evaluation Harness ---", flush=True)
+        test_loss, test_ppl = evaluate(model, test_loader, eval_iters=30)
+        print(f" Final Test Loss: {test_loss:.4f} | Final Test Perplexity: {test_ppl:.2f}", flush=True)
+
+    except Exception as e:
+        print("\n CRITICAL ERROR DURING TRAINING:", flush=True)
+        traceback.print_exc()
+        raise e
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Smol-Hybrid-Coder model with train/val/test harness & checkpoints.")
+    parser = argparse.ArgumentParser(description="Train Shortcake model with train/val/test harness & checkpoints.")
     parser.add_argument("--data_dir", type=str, default="data", help="Directory containing binary dataset files.")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Directory to save model checkpoints.")
-    parser.add_argument("--max_steps", type=int, default=500, help="Total training steps.")
-    parser.add_argument("--eval_interval", type=int, default=50, help="Steps between validation evaluations.")
-    parser.add_argument("--save_interval", type=int, default=100, help="Steps between checkpoint saves.")
+    parser.add_argument("--max_steps", type=int, default=10000, help="Total training steps.")
+    parser.add_argument("--eval_interval", type=int, default=100, help="Steps between validation evaluations.")
+    parser.add_argument("--log_interval", type=int, default=10, help="Steps between frequent training logs.")
+    parser.add_argument("--save_interval", type=int, default=500, help="Steps between checkpoint saves.")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size per step.")
     parser.add_argument("--lr", type=float, default=6e-4, help="Peak learning rate.")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from.")
@@ -230,6 +253,7 @@ def main():
         checkpoint_dir=args.checkpoint_dir,
         max_steps=args.max_steps,
         eval_interval=args.eval_interval,
+        log_interval=args.log_interval,
         save_interval=args.save_interval,
         batch_size=args.batch_size,
         learning_rate=args.lr,

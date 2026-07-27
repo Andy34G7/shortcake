@@ -1,6 +1,6 @@
 # Shortcake
 
-`Shortcake` is an ultra-compact hybrid language model (~15M–25M parameters) that interleaves **Mamba State Space Model (SSM)** layers and **Multi-Head Self-Attention** layers in a 3:1 ratio (emulates Nemotron).
+`Shortcake` is an ultra-compact hybrid language model (16,406,400 parameters) that interleaves **Mamba State Space Model (SSM)** layers and **Multi-Head Self-Attention** layers in a 3:1 ratio (emulates Nemotron).
 
 It features a custom Byte-Level BPE tokenizer, high-throughput binary memory-mapped dataloading, a full train/validate/test evaluation harness with checkpointing.
 
