@@ -4,12 +4,11 @@ from tokenizers import Tokenizer
 from tqdm import tqdm
 from datasets import load_dataset
 
-# Hardcoded 3 core code datasets
 DATASETS_CONFIG = [
-    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "python", "column": "content", "max_samples": 40000},
-    {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 40000},
-    {"name": "bigcode/the-stack", "config": "data/python", "column": "content", "max_samples": 40000},
+    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "python-edu", "column": "content", "max_samples": 50000},
+    {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 50000},
 ]
+
 
 
 def prepare_bin_data(

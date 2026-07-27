@@ -6,12 +6,11 @@ from tokenizers.pre_tokenizers import ByteLevel
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 from datasets import load_dataset
 
-# Hardcoded datasets for training code tokenizer & backbone
 DATASETS_CONFIG = [
-    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "python", "column": "content", "max_samples": 10000},
-    {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 10000},
-    {"name": "bigcode/the-stack", "config": "data/python", "column": "content", "max_samples": 10000},
+    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "python-edu", "column": "content", "max_samples": 15000},
+    {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 15000},
 ]
+
 
 
 def train_bpe_tokenizer_from_iterator(
