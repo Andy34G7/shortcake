@@ -51,7 +51,7 @@ def prepare_data_remote():
     volumes={VOLUME_DIR: volume},
     timeout=86400,  # Up to 24 hours runtime limit
 )
-def train_remote(max_steps: int = 10000, batch_size: int = 16, lr: float = 6e-4):
+def train_remote(max_steps: int = 10000, batch_size: int = 16, lr: float = 6e-4, resume: bool = False):
     """Runs Shortcake model pre-training on Modal GPU with automatic AMP acceleration."""
     from config import ModelConfig
     from train import train
@@ -63,9 +63,18 @@ def train_remote(max_steps: int = 10000, batch_size: int = 16, lr: float = 6e-4)
         print("Data files not found in Modal volume. Triggering data preparation...")
         prepare_data_remote.local()
 
+    resume_ckpt = None
+    if resume:
+        latest_path = os.path.join(checkpoint_dir, "latest.pt")
+        best_path = os.path.join(checkpoint_dir, "best_model.pt")
+        if os.path.exists(latest_path):
+            resume_ckpt = latest_path
+        elif os.path.exists(best_path):
+            resume_ckpt = best_path
+
     config = ModelConfig()
     print("=== Starting Shortcake GPU Training on Modal ===")
-    print(f"Max Steps: {max_steps:,} | Batch Size: {batch_size} | LR: {lr}")
+    print(f"Max Steps: {max_steps:,} | Batch Size: {batch_size} | LR: {lr} | Resume: {resume_ckpt or False}")
 
     train(
         config=config,
@@ -77,6 +86,7 @@ def train_remote(max_steps: int = 10000, batch_size: int = 16, lr: float = 6e-4)
         save_interval=500,
         batch_size=batch_size,
         learning_rate=lr,
+        resume_checkpoint=resume_ckpt,
     )
 
     volume.commit()
@@ -99,6 +109,7 @@ def main(
     max_steps: int = 10000,
     batch_size: int = 16,
     checkpoint: str = "best_model.pt",
+    resume: bool = False,
 ):
     """Modal CLI local entrypoint."""
     if action == "prepare":
@@ -106,7 +117,7 @@ def main(
         prepare_data_remote.remote()
     elif action == "train":
         print(f"Launching Training on Modal GPU (A10G)...")
-        train_remote.remote(max_steps=max_steps, batch_size=batch_size)
+        train_remote.remote(max_steps=max_steps, batch_size=batch_size, resume=resume)
     elif action == "download":
         os.makedirs("checkpoints", exist_ok=True)
         print(f"Downloading '{checkpoint}' from Modal Volume...")

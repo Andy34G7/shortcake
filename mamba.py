@@ -111,6 +111,9 @@ class MambaBlock(nn.Module):
         nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
 
         # Initialize dt_proj bias such that softplus(dt_proj.bias) ~ dt_init
+        self._reset_dt_bias()
+
+    def _reset_dt_bias(self):
         dt_scale = 1.0
         dt_min = 0.001
         dt_max = 0.1

@@ -9,7 +9,7 @@ import torch.nn as nn
 from typing import Tuple, Optional, Dict
 
 from config import ModelConfig
-from model import Shortcake
+from model import Shortcake, RMSNorm
 
 
 class BinaryMemmapDataLoader:
@@ -95,6 +95,41 @@ def save_checkpoint(
     print(f" Saved checkpoint to {filepath}", flush=True)
 
 
+def configure_optimizers(
+    model: Shortcake,
+    learning_rate: float,
+    weight_decay: float,
+    betas: Tuple[float, float] = (0.9, 0.95),
+) -> torch.optim.Optimizer:
+    """Configures AdamW with weight decay applied ONLY to 2D matrix weights (protecting RMSNorm, biases, A_log, D)."""
+    seen_param_ids = set()
+    decay_params = []
+    no_decay_params = []
+
+    whitelist_weight_modules = (nn.Linear,)
+    blacklist_weight_modules = (RMSNorm, nn.LayerNorm, nn.Embedding, nn.Conv1d)
+
+    for mn, m in model.named_modules():
+        for pn, p in m.named_parameters(recurse=False):
+            if id(p) in seen_param_ids:
+                continue
+            seen_param_ids.add(id(p))
+
+            fpn = f"{mn}.{pn}" if mn else pn
+            if pn.endswith("bias") or "A_log" in pn or "D" in pn or "dt_proj" in fpn or isinstance(m, blacklist_weight_modules):
+                no_decay_params.append(p)
+            elif isinstance(m, whitelist_weight_modules):
+                decay_params.append(p)
+            else:
+                no_decay_params.append(p)
+
+    optim_groups = [
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ]
+    return torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+
+
 def train(
     config: ModelConfig,
     data_dir: str = "data",
@@ -136,9 +171,9 @@ def train(
         model = Shortcake(config).to(device)
         print(f"Model initialized: {model.get_num_params():,} non-embedding parameters.\n", flush=True)
 
-        # Optimizer
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.95)
+        # Optimizer with selective weight decay
+        optimizer = configure_optimizers(
+            model=model, learning_rate=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.95)
         )
 
         start_step = 0
