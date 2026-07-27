@@ -150,7 +150,7 @@ def train(
         best_val_loss = ckpt.get("val_loss", float("inf"))
 
     # Scaler for AMP
-    scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
+    scaler = torch.amp.GradScaler("cuda", enabled=(device == "cuda"))
 
     model.train()
     start_time = time.time()
@@ -164,16 +164,23 @@ def train(
         x, y = train_loader.get_batch()
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.cuda.amp.autocast(enabled=(device == "cuda")):
+        with torch.amp.autocast("cuda", enabled=(device == "cuda")):
             outputs = model(x, targets=y, compute_jepa=config.jepa_enabled)
             loss = outputs.get("total_loss", outputs["loss"])
 
-        scaler.scale(loss).backward()
-        if grad_clip > 0.0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        scaler.step(optimizer)
-        scaler.update()
+
+        if device == "cuda":
+            scaler.scale(loss).backward()
+            if grad_clip > 0.0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if grad_clip > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
 
         # Validation & Logging
         if step % eval_interval == 0 or step == max_steps:
@@ -181,7 +188,8 @@ def train(
             dt = time.time() - start_time
             print(
                 f"Step {step:5d}/{max_steps} | Train Loss: {loss.item():.4f} | "
-                f"Val Loss: {val_loss:.4f} | Val PPL: {val_ppl:.2f} | LR: {lr:.6f} | Time: {dt:.1f}s"
+                f"Val Loss: {val_loss:.4f} | Val PPL: {val_ppl:.2f} | LR: {lr:.6f} | Time: {dt:.1f}s",
+                flush=True,
             )
             start_time = time.time()
 
@@ -194,6 +202,7 @@ def train(
         if step > 0 and (step % save_interval == 0 or step == max_steps):
             save_checkpoint(checkpoint_dir, f"checkpoint_step_{step}.pt", model, optimizer, step, loss.item(), config)
             save_checkpoint(checkpoint_dir, "latest.pt", model, optimizer, step, loss.item(), config)
+
 
     # Final Test Evaluation
     print("\n--- Final Test Evaluation Harness ---")
