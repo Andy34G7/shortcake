@@ -15,7 +15,7 @@ Shortcake provides built-in model presets that scale from **~5M to ~350M paramet
 | **`tiny`** | `5m` | **~5.2M** | 192 | 4 | 3 |
 | **`small`** *(Default)* | `16m` / `20m` | **~16.4M** | 384 | 8 | 6 |
 | **`base`** | `50m` | **~48.5M** | 512 | 12 | 8 |
-| **`medium`** | `110m` | **~108.2M** | 768 | 12 | 12 |
+| **`medium`** | `110m` | **~97.6M** | 768 | 12 | 12 |
 | **`large`** | `350m` | **~345.8M** | 1024 | 24 | 16 |
 
 ---

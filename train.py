@@ -81,18 +81,33 @@ def save_checkpoint(
     val_loss: float,
     config: ModelConfig,
 ):
-    """Save training state checkpoint."""
+    """Save training state checkpoint with param size tag in filename."""
     os.makedirs(checkpoint_dir, exist_ok=True)
-    filepath = os.path.join(checkpoint_dir, filename)
+    
+    # Format parameter count tag (e.g., 16.4m, 48.5m, 108.2m)
+    num_params = model.get_num_params()
+    param_tag = f"{num_params / 1e6:.1f}m".replace(".0", "")
+    
+    name_part, ext = os.path.splitext(filename)
+    param_filename = f"{name_part}_{param_tag}{ext}"
+    
     state = {
         "step": step,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "val_loss": val_loss,
         "config": config,
+        "param_tag": param_tag,
     }
-    torch.save(state, filepath)
-    print(f" Saved checkpoint to {filepath}", flush=True)
+    
+    # Save parameter-tagged checkpoint
+    param_filepath = os.path.join(checkpoint_dir, param_filename)
+    torch.save(state, param_filepath)
+    
+    # Save standard alias checkpoint
+    alias_filepath = os.path.join(checkpoint_dir, filename)
+    torch.save(state, alias_filepath)
+    print(f" Saved checkpoint to {param_filepath} (alias: {alias_filepath})", flush=True)
 
 
 def configure_optimizers(
@@ -152,9 +167,9 @@ def train(
         if device == "cpu":
             num_cpus = os.cpu_count() or 2
             torch.set_num_threads(num_cpus)
-            print(f"Starting Shortcake (~20M) training on CPU ({num_cpus} threads)...", flush=True)
+            print(f"Starting Shortcake training on CPU ({num_cpus} threads)...", flush=True)
         else:
-            print(f"Starting Shortcake (~20M) training on CUDA device: {torch.cuda.get_device_name(0)}", flush=True)
+            print(f"Starting Shortcake training on CUDA device: {torch.cuda.get_device_name(0)}", flush=True)
 
         # Load Data Loaders
         train_loader = BinaryMemmapDataLoader(os.path.join(data_dir, "train.bin"), config.max_seq_len, batch_size, device)
