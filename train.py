@@ -87,6 +87,8 @@ def save_checkpoint(
     # Format parameter count tag (e.g., 16.4m, 48.5m, 108.2m)
     num_params = model.get_num_params()
     param_tag = f"{num_params / 1e6:.1f}m".replace(".0", "")
+    if getattr(config, "jepa_enabled", False):
+        param_tag += "_jepa"
     
     name_part, ext = os.path.splitext(filename)
     param_filename = f"{name_part}_{param_tag}{ext}"
