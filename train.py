@@ -182,7 +182,7 @@ def train(
         # Resume from existing checkpoint if requested
         if resume_checkpoint and os.path.exists(resume_checkpoint):
             print(f"Resuming training from checkpoint: {resume_checkpoint}", flush=True)
-            ckpt = torch.load(resume_checkpoint, map_location=device)
+            ckpt = torch.load(resume_checkpoint, map_location=device, weights_only=False)
             model.load_state_dict(ckpt["model_state_dict"])
             optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             start_step = ckpt["step"] + 1

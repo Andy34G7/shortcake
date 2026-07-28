@@ -77,7 +77,7 @@ def main():
         raise FileNotFoundError(f"Checkpoint not found at {args.checkpoint}. Train the model first!")
 
     print(f"Loading checkpoint from {args.checkpoint}...")
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     config = ckpt.get("config", ModelConfig())
 
     tokenizer = Tokenizer.from_file(args.tokenizer)
