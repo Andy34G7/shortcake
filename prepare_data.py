@@ -5,8 +5,10 @@ from tqdm import tqdm
 from datasets import load_dataset
 
 DATASETS_CONFIG = [
-    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "python-edu", "column": "content", "max_samples": 50000},
-    {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 50000},
+    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "cosmopedia-v2", "column": "text", "max_samples": 60000},
+    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "fineweb-edu-dedup", "column": "text", "max_samples": 60000},
+    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "python-edu", "column": "content", "max_samples": 40000},
+    {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 40000},
 ]
 
 

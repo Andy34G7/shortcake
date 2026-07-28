@@ -8,8 +8,25 @@ from config import ModelConfig
 from model import Shortcake
 
 
-def sample_top_p_top_k(logits: torch.Tensor, temperature: float = 0.8, top_k: int = 40, top_p: float = 0.9) -> torch.Tensor:
-    """Filter logits using temperature, top-k, and nucleus (top-p) sampling."""
+def sample_top_p_top_k(
+    logits: torch.Tensor,
+    input_ids: torch.Tensor,
+    temperature: float = 0.8,
+    top_k: int = 40,
+    top_p: float = 0.9,
+    repetition_penalty: float = 1.15,
+) -> torch.Tensor:
+    """Filter logits using temperature, top-k, nucleus (top-p), and repetition penalty."""
+    logits = logits.clone()
+
+    # Repetition penalty
+    if repetition_penalty != 1.0:
+        for token_id in set(input_ids[0].tolist()):
+            if logits[0, token_id] < 0:
+                logits[0, token_id] *= repetition_penalty
+            else:
+                logits[0, token_id] /= repetition_penalty
+
     logits = logits / max(temperature, 1e-5)
 
     # Top-K filtering
@@ -22,7 +39,6 @@ def sample_top_p_top_k(logits: torch.Tensor, temperature: float = 0.8, top_k: in
         sorted_logits, sorted_indices = torch.sort(logits, descending=True)
         cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
 
-        # Remove tokens with cumulative probability above top_p threshold
         sorted_indices_to_remove = cumulative_probs > top_p
         sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
         sorted_indices_to_remove[..., 0] = 0
@@ -44,6 +60,7 @@ def generate_code(
     temperature: float = 0.8,
     top_k: int = 40,
     top_p: float = 0.9,
+    repetition_penalty: float = 1.15,
     device: str = "cpu",
 ) -> str:
     """Generate text completion for a given prompt string."""
@@ -52,11 +69,17 @@ def generate_code(
     input_ids = torch.tensor([encoding.ids], dtype=torch.long, device=device)
 
     for _ in range(max_new_tokens):
-        # Truncate to max_seq_len if necessary
         cond_ids = input_ids[:, -model.config.max_seq_len :]
         outputs = model(cond_ids)
         next_token_logits = outputs["logits"][:, -1, :]
-        next_token = sample_top_p_top_k(next_token_logits, temperature=temperature, top_k=top_k, top_p=top_p)
+        next_token = sample_top_p_top_k(
+            next_token_logits,
+            input_ids=input_ids,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+        )
         input_ids = torch.cat((input_ids, next_token), dim=1)
 
     generated_text = tokenizer.decode(input_ids[0].tolist())
@@ -68,8 +91,11 @@ def main():
     parser.add_argument("--checkpoint", type=str, default="checkpoints/best_model.pt", help="Path to checkpoint.pt file.")
     parser.add_argument("--tokenizer", type=str, default="tokenizer.json", help="Path to tokenizer.json.")
     parser.add_argument("--prompt", type=str, default="def binary_search(", help="Prompt text.")
-    parser.add_argument("--max_tokens", type=int, default=80, help="Max new tokens to generate.")
+    parser.add_argument("--max_tokens", type=int, default=120, help="Max new tokens to generate.")
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature.")
+    parser.add_argument("--top_k", type=int, default=40, help="Top-K sampling.")
+    parser.add_argument("--top_p", type=float, default=0.9, help="Top-P nucleus sampling.")
+    parser.add_argument("--repetition_penalty", type=float, default=1.15, help="Repetition penalty.")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -77,7 +103,7 @@ def main():
         raise FileNotFoundError(f"Checkpoint not found at {args.checkpoint}. Train the model first!")
 
     print(f"Loading checkpoint from {args.checkpoint}...")
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     config = ckpt.get("config", ModelConfig())
 
     tokenizer = Tokenizer.from_file(args.tokenizer)
@@ -93,6 +119,9 @@ def main():
         prompt=args.prompt,
         max_new_tokens=args.max_tokens,
         temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        repetition_penalty=args.repetition_penalty,
         device=device,
     )
     print(output_text)

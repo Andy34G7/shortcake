@@ -152,9 +152,9 @@ class MambaBlock(nn.Module):
 
         # Transpose for selective scan: (B, d_inner, L)
         u = x_conv
-        delta = dt.transpose(1, 2)
-        B_ssm = B_ssm.transpose(1, 2) # (B, d_state, L)
-        C_ssm = C_ssm.transpose(1, 2) # (B, d_state, L)
+        delta = dt.transpose(1, 2).to(u.dtype)
+        B_ssm = B_ssm.transpose(1, 2).to(u.dtype)
+        C_ssm = C_ssm.transpose(1, 2).to(u.dtype)
         A = -torch.exp(self.A_log.float()) # (d_inner, d_state)
 
         # 4. Run Selective Scan

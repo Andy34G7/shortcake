@@ -7,6 +7,8 @@ from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 from datasets import load_dataset
 
 DATASETS_CONFIG = [
+    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "cosmopedia-v2", "column": "text", "max_samples": 25000},
+    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "fineweb-edu-dedup", "column": "text", "max_samples": 25000},
     {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "python-edu", "column": "content", "max_samples": 15000},
     {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 15000},
 ]
@@ -19,7 +21,7 @@ def train_bpe_tokenizer_from_iterator(
     vocab_size: int = 16384,
     min_frequency: int = 2,
 ):
-    """Train a custom Byte-Level BPE Tokenizer for code from a text iterator."""
+    """Train a custom Byte-Level BPE Tokenizer for English & Code from a text iterator."""
     tokenizer = Tokenizer(BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
     tokenizer.decoder = ByteLevelDecoder()
@@ -30,6 +32,11 @@ def train_bpe_tokenizer_from_iterator(
         "<bos>",
         "<eos>",
         "<mask>",
+        "<|im_start|>",
+        "<|im_end|>",
+        "<|system|>",
+        "<|user|>",
+        "<|assistant|>",
         "```",
         "def ",
         "class ",
