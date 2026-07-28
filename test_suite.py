@@ -111,12 +111,24 @@ def test_splade_head():
     print(" SPLADE Head test passed!")
 
 
+def test_model_presets():
+    print("Testing Model Size Presets (tiny, small, base, medium, large)...")
+    for name in ["tiny", "5m", "small", "16m", "base", "50m", "medium", "110m", "large", "350m"]:
+        cfg = ModelConfig.from_preset(name)
+        m = Shortcake(cfg)
+        params = m.get_num_params()
+        assert params > 0, f"Preset {name} parameter count invalid"
+
+    print(" Model Size Presets test passed!")
+
+
 def main():
     print("=== Running Shortcake Test Suite ===")
     test_model_forward_backward()
     test_tokenizer_and_data_prep()
     test_overfit_mini_batch()
     test_splade_head()
+    test_model_presets()
     print("\n ALL TESTS PASSED SUCCESSFULLY!")
 
 

@@ -273,6 +273,7 @@ def train(
 
 def main():
     parser = argparse.ArgumentParser(description="Train Shortcake model with train/val/test harness & checkpoints.")
+    parser.add_argument("--preset", type=str, default="small", help="Model size variant: 'tiny' (5M), 'small' (16M), 'base' (50M), 'medium' (110M), 'large' (350M).")
     parser.add_argument("--data_dir", type=str, default="data", help="Directory containing binary dataset files.")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Directory to save model checkpoints.")
     parser.add_argument("--max_steps", type=int, default=10000, help="Total training steps.")
@@ -285,7 +286,7 @@ def main():
     parser.add_argument("--jepa", action="store_true", help="Enable JEPA representation pre-training loss.")
     args = parser.parse_args()
 
-    config = ModelConfig(jepa_enabled=args.jepa)
+    config = ModelConfig.from_preset(args.preset, jepa_enabled=args.jepa)
     train(
         config=config,
         data_dir=args.data_dir,
