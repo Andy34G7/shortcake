@@ -16,7 +16,7 @@ current `model.Shortcake` so the two can be compared.
 
 Run from the repo root (after `python ablations/prep.py`):
 
-    python ablations/abl.py --variant baseline rope+init --no-checkpoint
+    python ablations/abl.py --variant baseline rope+init
     python ablations/abl.py --variant all --count
 """
 
@@ -178,18 +178,6 @@ VARIANTS = {
 
 # --------------------------------------------------------------------------- training
 
-def disable_scan_checkpointing():
-    """Make torch.utils.checkpoint.checkpoint a plain call.
-
-    MambaBlock wraps the pure-PyTorch scan in checkpoint() during training to save memory;
-    the tiny ablation models do not need that, and skipping the recompute is faster.
-    This patches torch globally, which is fine for this standalone script.
-    """
-    import torch.utils.checkpoint as checkpoint_module
-
-    checkpoint_module.checkpoint = lambda fn, *args, use_reentrant=False, **kwargs: fn(*args, **kwargs)
-
-
 def param_counts(model: nn.Module):
     total = sum(p.numel() for p in model.parameters())  # tied lm_head counted once
     return total, total - model.tok_embeddings.weight.numel()
@@ -261,7 +249,6 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--variant", nargs="+", required=True, help=f"one or more of: all, {', '.join(VARIANTS)}")
     ap.add_argument("--count", action="store_true", help="only print parameter counts")
-    ap.add_argument("--no-checkpoint", action="store_true", help="disable gradient checkpointing of the Mamba scan (faster)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--steps", type=int, default=1200)
     ap.add_argument("--warmup", type=int, default=100)
@@ -295,8 +282,6 @@ def main():
     if not (args.out_dir / "train.bin").exists():
         sys.exit(f"{args.out_dir / 'train.bin'} not found; run `python ablations/prep.py` first")
     torch.set_num_threads(args.threads)
-    if args.no_checkpoint:
-        disable_scan_checkpointing()
     for name in names:
         train_variant(name, args)
 

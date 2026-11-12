@@ -309,13 +309,9 @@ class MambaBlock(nn.Module):
                 u, delta, A, B_ssm, C_ssm, self.D.float(), z=None, delta_bias=None, delta_softplus=False
             )
         else:
-            # Native PyTorch scan with gradient checkpointing during training to save VRAM
-            if self.training:
-                y = torch.utils.checkpoint.checkpoint(
-                    selective_scan_pytorch, u, delta, A, B_ssm, C_ssm, self.D.float(), use_reentrant=False
-                )
-            else:
-                y = selective_scan_pytorch(u, delta, A, B_ssm, C_ssm, self.D.float())
+            # Native PyTorch scan. Its custom backward already recomputes states chunk by chunk,
+            # so no gradient checkpointing is needed to keep memory low.
+            y = selective_scan_pytorch(u, delta, A, B_ssm, C_ssm, self.D.float())
 
         # 5. Multiply by gate z (SiLU(z)) and project out
         y = y.transpose(1, 2) # (B, L, d_inner)

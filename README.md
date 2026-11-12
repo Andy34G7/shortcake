@@ -2,7 +2,7 @@
 
 `Shortcake` is a hybrid language model family (5M to 350M parameters) that interleaves **Mamba State Space Model (SSM)** layers and **Multi-Head Self-Attention** layers in a 3:1 ratio (emulating Nemotron-style hybrid backbones).
 
-It features a custom Byte-Level BPE tokenizer with ChatML support, high-throughput binary memory-mapped data loading, memory-efficient PyTorch SSM selective scan with CUDA kernel support, gradient checkpointing for minimal VRAM footprint, selective weight decay, Supervised Fine-Tuning (SFT), terminal chat interface, and evaluation benchmark tools.
+It features a custom Byte-Level BPE tokenizer with ChatML support, high-throughput binary memory-mapped data loading, memory-efficient PyTorch SSM selective scan with CUDA kernel support, selective weight decay, Supervised Fine-Tuning (SFT), terminal chat interface, and evaluation benchmark tools.
 
 ---
 
@@ -24,7 +24,7 @@ Shortcake provides built-in model presets that scale from **~5M to ~350M paramet
 
 - **Layer Ratio**: 3 Mamba layers per 1 Self-Attention layer.
 - **Selective Scan Engine**: Memory-efficient native PyTorch selective scan with automatic fallback to fused `mamba-ssm` CUDA kernels when installed.
-- **Gradient Checkpointing**: Discards intermediate sequence step autograd graph nodes during training, keeping VRAM usage under **< 1.5 GB** at batch sizes of 16, 32, or higher.
+- **Low-Memory Scan Backward**: The PyTorch scan processes the sequence in chunks and computes gradients with a hand-written reverse-time recurrence that recomputes states per chunk, so the full per-step state history is never stored and no gradient checkpointing is needed.
 - **Preserved SSM Step-Size Initialization**: Keeps Mamba's own `dt_proj` initialization (weight $\sim U(\pm \text{dt\_rank}^{-1/2})$, bias from `_reset_dt_bias()`) after the generic $\mathcal{N}(0, 0.02)$ init, to guarantee calibrated Mamba state step sizes ($\Delta \approx 0.001..0.1$) across deep sequences.
 - **Scaled Residual Initialization**: Output projections that write into the residual stream (`out_proj` in Mamba and Attention, `w2` in SwiGLU) use std $0.02 / \sqrt{2 \cdot n\_layer}$.
 - **Selective Weight Decay**: Configures AdamW to apply weight decay (0.01..0.1) exclusively to 2D matrix weights, protecting 1D RMSNorm gain weights, biases, $A\_log$, $D$, and $dt\_proj$ bias.

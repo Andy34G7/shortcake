@@ -13,7 +13,7 @@ From the repo root:
 python ablations/prep.py
 
 # 2. Train one or more variants (defaults reproduce the table below).
-python ablations/abl.py --variant baseline rope+init --no-checkpoint
+python ablations/abl.py --variant baseline rope+init
 
 # Parameter counts only.
 python ablations/abl.py --variant all --count
@@ -22,9 +22,6 @@ python ablations/abl.py --variant all --count
 Everything generated (tokenizer, `train.bin`/`val.bin`, per-run JSON in `results/`) goes
 to `ablations/out/`, which is git-ignored. `prep.py` stubs the `datasets` package if it is not
 installed, since `train_tokenizer.py` imports it but the function used here does not need it.
-
-`--no-checkpoint` turns off the gradient checkpointing that `MambaBlock` applies to the
-pure-PyTorch scan in training. Results are the same; it is just faster on these small models.
 
 ## Variants
 
