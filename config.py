@@ -29,11 +29,25 @@ class ModelConfig:
     rms_norm_eps: float = 1e-5
     dropout: float = 0.0
     tie_weights: bool = True
-    
+    rope: bool = True  # Rotary position embeddings in attention layers (no learned params)
+
     # JEPA latent predictor settings
     jepa_enabled: bool = False
-    jepa_mask_ratio: float = 0.15
+    jepa_mask_ratio: float = 0.15  # Fraction of positions hidden from the context pass
+    jepa_span_len: int = 8  # Positions are hidden in contiguous spans of (up to) this length
+    jepa_loss_weight: float = 0.5  # total_loss = lm_loss + jepa_loss_weight * jepa_loss
     jepa_predictor_d_model: int = 192
+
+    # Fields added after checkpoints were first saved, with the value that reproduces the
+    # behaviour of models trained before the field existed. Checkpoints pickle the config
+    # object, and a dataclass default is also a class attribute, so a plain
+    # getattr(old_config, "rope", False) would see the *new* default (True) instead.
+    _LEGACY_DEFAULTS = {"rope": False}
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        for name, legacy_value in self._LEGACY_DEFAULTS.items():
+            self.__dict__.setdefault(name, legacy_value)
 
     def __post_init__(self):
         if self.dt_rank is None:

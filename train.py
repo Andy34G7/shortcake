@@ -138,6 +138,8 @@ def configure_optimizers(
             elif isinstance(m, whitelist_weight_modules):
                 decay_params.append(p)
             else:
+                # Parameters owned directly by non-Linear modules, e.g. Shortcake.jepa_mask_embedding
+                # (an embedding vector, so no decay) and nn.MultiheadAttention.in_proj_weight.
                 no_decay_params.append(p)
 
     optim_groups = [
@@ -250,9 +252,12 @@ def train(
                 steps_logged = log_interval if step > start_step else 1
                 sec_per_step = dt / steps_logged
                 tok_per_sec = (tokens_per_step * steps_logged) / max(dt, 1e-5)
+                jepa_info = ""
+                if "jepa_loss" in outputs:
+                    jepa_info = f" (LM: {outputs['loss'].item():.4f}, JEPA: {outputs['jepa_loss'].item():.4f})"
                 print(
                     f"Epoch {epoch:.2f} | Step {step:5d}/{max_steps} | "
-                    f"Train Loss: {loss.item():.4f} | LR: {lr:.6f} | "
+                    f"Train Loss: {loss.item():.4f}{jepa_info} | LR: {lr:.6f} | "
                     f"Speed: {tok_per_sec:.0f} tok/s ({sec_per_step:.2f}s/step)",
                     flush=True,
                 )
@@ -300,7 +305,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size per step.")
     parser.add_argument("--lr", type=float, default=6e-4, help="Peak learning rate.")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from.")
-    parser.add_argument("--jepa", action="store_true", help="Enable JEPA representation pre-training loss.")
+    parser.add_argument("--jepa", action="store_true", help="Enable the auxiliary JEPA loss (predict clean hidden states of span-masked positions). Costs roughly one extra backbone forward/backward per step.")
     args = parser.parse_args()
 
     config = ModelConfig.from_preset(args.preset, jepa_enabled=args.jepa)

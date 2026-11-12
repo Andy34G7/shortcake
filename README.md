@@ -25,9 +25,12 @@ Shortcake provides built-in model presets that scale from **~5M to ~350M paramet
 - **Layer Ratio**: 3 Mamba layers per 1 Self-Attention layer.
 - **Selective Scan Engine**: Memory-efficient native PyTorch selective scan with automatic fallback to fused `mamba-ssm` CUDA kernels when installed.
 - **Gradient Checkpointing**: Discards intermediate sequence step autograd graph nodes during training, keeping VRAM usage under **< 1.5 GB** at batch sizes of 16, 32, or higher.
-- **Preserved SSM Step-Size Initialization**: Preserves `dt_proj.bias` initialization (`_reset_dt_bias()`) to guarantee calibrated Mamba state step sizes ($\Delta \approx 0.001..0.1$) across deep sequences.
+- **Preserved SSM Step-Size Initialization**: Keeps Mamba's own `dt_proj` initialization (weight $\sim U(\pm \text{dt\_rank}^{-1/2})$, bias from `_reset_dt_bias()`) after the generic $\mathcal{N}(0, 0.02)$ init, to guarantee calibrated Mamba state step sizes ($\Delta \approx 0.001..0.1$) across deep sequences.
+- **Scaled Residual Initialization**: Output projections that write into the residual stream (`out_proj` in Mamba and Attention, `w2` in SwiGLU) use std $0.02 / \sqrt{2 \cdot n\_layer}$.
 - **Selective Weight Decay**: Configures AdamW to apply weight decay (0.01..0.1) exclusively to 2D matrix weights, protecting 1D RMSNorm gain weights, biases, $A\_log$, $D$, and $dt\_proj$ bias.
 - **Attention Engine**: PyTorch `scaled_dot_product_attention` (SDPA / FlashAttention-2).
+- **Rotary Position Embeddings (RoPE)**: Applied to queries and keys in the attention layers (base 10000, no learned parameters). Enabled by `rope=True` in `ModelConfig`; checkpoints saved before RoPE load with it disabled and behave as before.
+- **JEPA Auxiliary Objective (`--jepa`, experimental)**: A second "context" pass replaces contiguous spans (~15% of positions, span length 8) with a learned mask embedding; a small predictor maps the context hidden states to the clean pass's hidden states (stop-gradient, no EMA target network), with MSE on the masked positions only. The LM loss and logits come from the clean pass alone. Costs roughly one extra backbone forward/backward per training step; inference is unaffected.
 - **Tokenizer**: Custom Byte-Level BPE (~16,384 vocabulary) with ChatML special tokens (`<|im_start|>`, `<|im_end|>`).
 
 ---
@@ -129,7 +132,7 @@ uv run python generate.py --checkpoint checkpoints/best_model.pt --prompt "def b
 
 ## Automated Test Suite
 
-Verify model architecture, size presets, tokenizer, loss reduction, and SPLADE head:
+Verify model architecture, size presets, tokenizer, loss reduction, RoPE, initialization, JEPA objective, causality, and SPLADE head (skipped if `splade_head.py` is absent):
 ```bash
 uv run python test_suite.py
 ```
