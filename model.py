@@ -2,14 +2,14 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 from config import ModelConfig
 from mamba import MambaBlock
 
 
 class RMSNorm(nn.Module):
-    """Root Mean Square Layer Normalization."""
+    """Root Mean Square Layer Normalization (numerically stable in FP16/BF16)."""
 
     def __init__(self, dim: int, eps: float = 1e-5):
         super().__init__()
@@ -17,8 +17,12 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        variance = x.pow(2).mean(-1, keepdim=True)
-        return x * torch.rsqrt(variance + self.eps) * self.weight
+        if hasattr(F, "rms_norm"):
+            return F.rms_norm(x, (x.shape[-1],), self.weight, self.eps)
+        x_f = x.float()
+        variance = x_f.pow(2).mean(-1, keepdim=True)
+        out = x_f * torch.rsqrt(variance + self.eps)
+        return out.to(x.dtype) * self.weight
 
 
 class SwiGLUMLP(nn.Module):
@@ -39,8 +43,38 @@ class SwiGLUMLP(nn.Module):
         return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
 
 
+class RotaryEmbedding(nn.Module):
+    """Rotary Position Embedding (RoPE) for Attention layers."""
+
+    def __init__(self, head_dim: int, base: float = 10000.0):
+        super().__init__()
+        assert head_dim % 2 == 0, f"head_dim ({head_dim}) must be even for RoPE"
+        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(
+        self,
+        q: torch.Tensor,  # (B, H, L, D_head)
+        k: torch.Tensor,  # (B, H, L, D_head)
+        pos_offset: int = 0,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        l = q.shape[2]
+        positions = torch.arange(pos_offset, pos_offset + l, device=q.device, dtype=torch.float32)
+        freqs = torch.outer(positions, self.inv_freq)  # (L, D_head // 2)
+        cos = freqs.cos()[None, None, :, :]
+        sin = freqs.sin()[None, None, :, :]
+
+        def _rotate(x: torch.Tensor) -> torch.Tensor:
+            x_f = x.float()
+            x1, x2 = x_f.chunk(2, dim=-1)
+            out = torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
+            return out.to(x.dtype)
+
+        return _rotate(q), _rotate(k)
+
+
 class AttentionBlock(nn.Module):
-    """Multi-Head Self-Attention with Causal Mask and PyTorch SDPA."""
+    """Multi-Head Self-Attention with QK-Norm, RoPE, KV-Cache, and PyTorch SDPA."""
 
     def __init__(self, config: ModelConfig):
         super().__init__()
@@ -51,17 +85,24 @@ class AttentionBlock(nn.Module):
 
         self.qkv_proj = nn.Linear(self.d_model, 3 * self.d_model, bias=False)
         self.out_proj = nn.Linear(self.d_model, self.d_model, bias=False)
+        self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        self.rope = RotaryEmbedding(self.head_dim)
         self.norm = RMSNorm(self.d_model, eps=config.rms_norm_eps)
         self.mlp = SwiGLUMLP(config)
         self.mlp_norm = RMSNorm(self.d_model, eps=config.rms_norm_eps)
         self.dropout = config.dropout
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        cache: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> torch.Tensor:
         b, l, d = x.shape
         h = self.norm(x)
 
         # QKV Projections
-        qkv = self.qkv_proj(h) # (B, L, 3 * D)
+        qkv = self.qkv_proj(h)  # (B, L, 3 * D)
         q, k, v = qkv.chunk(3, dim=-1)
 
         # Reshape for multi-head attention: (B, H, L, D_head)
@@ -69,10 +110,49 @@ class AttentionBlock(nn.Module):
         k = k.view(b, l, self.n_head, self.head_dim).transpose(1, 2)
         v = v.view(b, l, self.n_head, self.head_dim).transpose(1, 2)
 
-        # Scaled Dot Product Attention with Causal Mask
-        attn_out = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, dropout_p=self.dropout if self.training else 0.0
-        ) # (B, H, L, D_head)
+        # QK-Norm for attention logit stability
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        # Apply RoPE with cached position offset
+        past_k = cache.get("k") if cache is not None else None
+        past_v = cache.get("v") if cache is not None else None
+        pos_offset = cache.get("pos", 0) if cache is not None else 0
+        q, k = self.rope(q, k, pos_offset=pos_offset)
+
+        if cache is not None:
+            if past_k is not None:
+                k = torch.cat([past_k, k], dim=2)
+                v = torch.cat([past_v, v], dim=2)
+            # Keep KV cache bounded to max_seq_len
+            if k.shape[2] > self.config.max_seq_len:
+                k = k[:, :, -self.config.max_seq_len :, :]
+                v = v[:, :, -self.config.max_seq_len :, :]
+            cache["k"] = k
+            cache["v"] = v
+            cache["pos"] = pos_offset + l
+
+        # Scaled Dot Product Attention
+        dropout_p = self.dropout if self.training else 0.0
+        if past_k is None:
+            attn_out = F.scaled_dot_product_attention(
+                q, k, v, is_causal=True, dropout_p=dropout_p
+            )
+        elif l == 1:
+            # Single-token decode attends to all cached past keys + current key
+            attn_out = F.scaled_dot_product_attention(
+                q, k, v, is_causal=False, dropout_p=dropout_p
+            )
+        else:
+            # Multi-token continuation with existing cache
+            total_kv = k.shape[2]
+            past_len = total_kv - l
+            q_idx = torch.arange(l, device=x.device).unsqueeze(1) + past_len
+            k_idx = torch.arange(total_kv, device=x.device).unsqueeze(0)
+            attn_mask = k_idx <= q_idx
+            attn_out = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_mask, dropout_p=dropout_p
+            )
 
         attn_out = attn_out.transpose(1, 2).contiguous().view(b, l, d)
         attn_out = self.out_proj(attn_out)
@@ -92,8 +172,12 @@ class MambaBlockWrapper(nn.Module):
         self.mlp = SwiGLUMLP(config)
         self.mlp_norm = RMSNorm(config.d_model, eps=config.rms_norm_eps)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.mamba(self.norm(x))
+    def forward(
+        self,
+        x: torch.Tensor,
+        cache: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        x = x + self.mamba(self.norm(x), cache=cache)
         x = x + self.mlp(self.mlp_norm(x))
         return x
 
@@ -103,6 +187,8 @@ class JEPAPredictor(nn.Module):
 
     def __init__(self, config: ModelConfig):
         super().__init__()
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.d_model))
+        nn.init.normal_(self.mask_token, mean=0.0, std=0.02)
         self.proj_in = nn.Linear(config.d_model, config.jepa_predictor_d_model)
         self.predictor_layer = nn.TransformerEncoderLayer(
             d_model=config.jepa_predictor_d_model,
@@ -113,8 +199,11 @@ class JEPAPredictor(nn.Module):
         )
         self.proj_out = nn.Linear(config.jepa_predictor_d_model, config.d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.proj_in(x)
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Replaces masked positions with a learned mask_token before predicting their latents."""
+        mask_tok = self.mask_token.expand(x.shape[0], x.shape[1], -1).to(x.dtype)
+        masked_x = torch.where(mask.unsqueeze(-1), mask_tok, x)
+        h = self.proj_in(masked_x)
         h = self.predictor_layer(h)
         return self.proj_out(h)
 
@@ -152,10 +241,15 @@ class Shortcake(nn.Module):
         # Initialize weights
         self.apply(self._init_weights)
 
-        # Re-apply Mamba dt_proj bias initialization (prevent zeroing by _init_weights)
+        # Apply GPT-2 / Mamba residual projection scaling (1 / sqrt(2 * n_layer))
+        # and restore Mamba dt_proj weight & bias initialization overwritten by _init_weights
+        residual_std = 0.02 / math.sqrt(2 * config.n_layer)
+        for pn, p in self.named_parameters():
+            if pn.endswith("out_proj.weight") or pn.endswith("mlp.w2.weight"):
+                torch.nn.init.normal_(p, mean=0.0, std=residual_std)
         for m in self.modules():
             if isinstance(m, MambaBlock):
-                m._reset_dt_bias()
+                m._reset_dt_parameters()
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -172,32 +266,43 @@ class Shortcake(nn.Module):
             n_params -= self.tok_embeddings.weight.numel()
         return n_params
 
+    def init_cache(self) -> List[Dict[str, Any]]:
+        """Initialize an empty per-layer inference cache (SSM states + Attention KV cache)."""
+        return [{} for _ in range(len(self.layers))]
+
     def forward(
         self,
         input_ids: torch.Tensor,
         targets: Optional[torch.Tensor] = None,
         compute_jepa: bool = False,
+        cache: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         input_ids: (B, L)
         targets: (B, L) optional ground truth token targets for Causal LM loss
+        cache: Optional list of per-layer dicts returned by init_cache() for fast O(1) decode
         """
         b, l = input_ids.shape
         x = self.tok_embeddings(input_ids)
         x = self.drop(x)
 
         # Pass through interleaved backbone
-        for layer in self.layers:
-            x = layer(x)
+        for i, layer in enumerate(self.layers):
+            layer_cache = cache[i] if cache is not None else None
+            x = layer(x, cache=layer_cache)
 
-        h = self.norm_f(x) # Hidden representation (B, L, D)
+        h = self.norm_f(x)  # Hidden representation (B, L, D)
 
         # Output LM logits
-        logits = self.lm_head(h) # (B, L, Vocab)
+        logits = self.lm_head(h)  # (B, L, Vocab)
 
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.reshape(-1, self.config.vocab_size), targets.reshape(-1))
+            loss = F.cross_entropy(
+                logits.reshape(-1, self.config.vocab_size),
+                targets.reshape(-1),
+                ignore_index=-100,
+            )
 
         output = {
             "logits": logits,
@@ -205,13 +310,12 @@ class Shortcake(nn.Module):
             "loss": loss,
         }
 
-        # Optional JEPA Latent Loss calculation
+        # Optional JEPA Latent Loss calculation (masked positions replaced with mask_token)
         if compute_jepa and hasattr(self, "jepa_predictor"):
-            # Simple JEPA loss: predict hidden states of random token positions
             mask_ratio = self.config.jepa_mask_ratio
             mask = torch.rand(b, l, device=input_ids.device) < mask_ratio
             if mask.sum() > 0:
-                pred_h = self.jepa_predictor(h)
+                pred_h = self.jepa_predictor(h, mask)
                 jepa_loss = F.mse_loss(pred_h[mask], h[mask].detach())
                 output["jepa_loss"] = jepa_loss
                 if loss is not None:

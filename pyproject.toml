@@ -1,6 +1,6 @@
 [project]
 name = "shortcake"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ultra-small performant hybrid Mamba-Transformer model for code"
 
 readme = "README.md"
@@ -15,6 +15,12 @@ dependencies = [
     "accelerate>=0.25.0",
     "matplotlib>=3.7.0",
     "pytest>=7.4.0",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "mamba-ssm>=2.0.0",
+    "causal-conv1d>=1.4.0",
 ]
 
 

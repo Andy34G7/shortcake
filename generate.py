@@ -16,18 +16,20 @@ def sample_top_p_top_k(
     top_p: float = 0.9,
     repetition_penalty: float = 1.15,
 ) -> torch.Tensor:
-    """Filter logits using temperature, top-k, nucleus (top-p), and repetition penalty."""
+    """Filter logits using repetition penalty, temperature (or greedy), top-k, and top-p."""
     logits = logits.clone()
 
-    # Repetition penalty
-    if repetition_penalty != 1.0:
-        for token_id in set(input_ids[0].tolist()):
-            if logits[0, token_id] < 0:
-                logits[0, token_id] *= repetition_penalty
-            else:
-                logits[0, token_id] /= repetition_penalty
+    # Vectorized repetition penalty (no GPU->CPU sync)
+    if repetition_penalty != 1.0 and input_ids.numel() > 0:
+        score = torch.gather(logits, 1, input_ids)
+        score = torch.where(score < 0, score * repetition_penalty, score / repetition_penalty)
+        logits.scatter_(1, input_ids, score)
 
-    logits = logits / max(temperature, 1e-5)
+    # Greedy decoding when temperature <= 0
+    if temperature <= 0.0:
+        return torch.argmax(logits, dim=-1, keepdim=True)
+
+    logits = logits / temperature
 
     # Top-K filtering
     if top_k > 0:
@@ -63,15 +65,19 @@ def generate_code(
     repetition_penalty: float = 1.15,
     device: str = "cpu",
 ) -> str:
-    """Generate text completion for a given prompt string."""
+    """Generate text completion using SSM state + Attention KV caching."""
     model.eval()
     encoding = tokenizer.encode(prompt)
     input_ids = torch.tensor([encoding.ids], dtype=torch.long, device=device)
+    eos_token_id = tokenizer.token_to_id("<eos>")
+
+    # Prefill prompt once to populate SSM states & KV cache
+    cache = model.init_cache()
+    cond_ids = input_ids[:, -model.config.max_seq_len :]
+    outputs = model(cond_ids, cache=cache)
+    next_token_logits = outputs["logits"][:, -1, :]
 
     for _ in range(max_new_tokens):
-        cond_ids = input_ids[:, -model.config.max_seq_len :]
-        outputs = model(cond_ids)
-        next_token_logits = outputs["logits"][:, -1, :]
         next_token = sample_top_p_top_k(
             next_token_logits,
             input_ids=input_ids,
@@ -80,7 +86,13 @@ def generate_code(
             top_p=top_p,
             repetition_penalty=repetition_penalty,
         )
+        if eos_token_id is not None and next_token.item() == eos_token_id:
+            break
+
         input_ids = torch.cat((input_ids, next_token), dim=1)
+        # Single-token O(1) Mamba + cached KV Attention decode step
+        outputs = model(next_token, cache=cache)
+        next_token_logits = outputs["logits"][:, -1, :]
 
     generated_text = tokenizer.decode(input_ids[0].tolist())
     return generated_text

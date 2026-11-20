@@ -39,10 +39,13 @@ def generate_chat_response(
     eos_token_id = tokenizer.token_to_id("<|im_end|>")
     generated_tokens = []
 
+    # Prefill conversation history once to populate SSM states & KV cache
+    cache = model.init_cache()
+    cond_ids = input_ids[:, -model.config.max_seq_len :]
+    outputs = model(cond_ids, cache=cache)
+    next_token_logits = outputs["logits"][:, -1, :]
+
     for _ in range(max_new_tokens):
-        cond_ids = input_ids[:, -model.config.max_seq_len :]
-        outputs = model(cond_ids)
-        next_token_logits = outputs["logits"][:, -1, :]
         next_token = sample_top_p_top_k(
             next_token_logits,
             input_ids=input_ids,
@@ -53,11 +56,15 @@ def generate_chat_response(
         )
 
         token_item = next_token.item()
-        if token_item == eos_token_id:
+        if eos_token_id is not None and token_item == eos_token_id:
             break
 
         input_ids = torch.cat((input_ids, next_token), dim=1)
         generated_tokens.append(token_item)
+
+        # Single-token O(1) Mamba + cached KV Attention decode step
+        outputs = model(next_token, cache=cache)
+        next_token_logits = outputs["logits"][:, -1, :]
 
     response_text = tokenizer.decode(generated_tokens).strip()
     # Clean up residual stop tags if generated

@@ -9,8 +9,7 @@ from datasets import load_dataset
 DATASETS_CONFIG = [
     {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "cosmopedia-v2", "column": "text", "max_samples": 25000},
     {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "fineweb-edu-dedup", "column": "text", "max_samples": 25000},
-    {"name": "HuggingFaceTB/SmolLM-Corpus", "config": "python-edu", "column": "content", "max_samples": 15000},
-    {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 15000},
+    {"name": "codeparrot/codeparrot-clean", "config": None, "column": "content", "max_samples": 20000},
 ]
 
 
@@ -37,13 +36,6 @@ def train_bpe_tokenizer_from_iterator(
         "<|system|>",
         "<|user|>",
         "<|assistant|>",
-        "```",
-        "def ",
-        "class ",
-        "return ",
-        "import ",
-        "    ",
-        "  ",
     ]
 
     trainer = BpeTrainer(
