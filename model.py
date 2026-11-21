@@ -276,11 +276,13 @@ class Shortcake(nn.Module):
         targets: Optional[torch.Tensor] = None,
         compute_jepa: bool = False,
         cache: Optional[List[Dict[str, Any]]] = None,
+        return_logits: bool = True,
     ) -> Dict[str, Any]:
         """
         input_ids: (B, L)
         targets: (B, L) optional ground truth token targets for Causal LM loss
         cache: Optional list of per-layer dicts returned by init_cache() for fast O(1) decode
+        return_logits: Set False to skip lm_head projection (e.g., when using SPLADE head)
         """
         b, l = input_ids.shape
         x = self.tok_embeddings(input_ids)
@@ -293,8 +295,8 @@ class Shortcake(nn.Module):
 
         h = self.norm_f(x)  # Hidden representation (B, L, D)
 
-        # Output LM logits
-        logits = self.lm_head(h)  # (B, L, Vocab)
+        # Output LM logits (skip when only hidden_states are needed)
+        logits = self.lm_head(h) if (return_logits or targets is not None) else None
 
         loss = None
         if targets is not None:

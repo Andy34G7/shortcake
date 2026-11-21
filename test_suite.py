@@ -98,17 +98,30 @@ def test_overfit_mini_batch():
 
 
 def test_splade_head():
-    print("Testing SPLADE Head Sparse Representation...")
+    print("Testing SPLADE Head Sparse Representation (Tied Weights & Pad Masking)...")
     config = ModelConfig(vocab_size=1000, d_model=128, n_layer=4, n_head=4)
     backbone = Shortcake(config)
-    splade_model = ShortcakeSPLADE(backbone)
+    splade_model = ShortcakeSPLADE(backbone, tie_lm_head=True, pad_token_id=1).eval()
 
-    x = torch.randint(0, config.vocab_size, (2, 16))
-    out = splade_model(x)
+    # Verify decoder weight is tied to backbone.lm_head.weight
+    assert splade_model.splade_head.decoder.weight is backbone.lm_head.weight, "SPLADE decoder should tie to lm_head"
+
+    x = torch.randint(2, config.vocab_size, (2, 16))
+    mask = torch.ones((2, 16), dtype=torch.bool)
+    mask[1, 10:] = False
+    x[1, 10:] = 1  # pad tokens
+
+    with torch.no_grad():
+        out = splade_model(x, attention_mask=mask)
+        # Verify masked-out positions do not affect sparse_vector when replaced
+        x_alt = x.clone()
+        x_alt[1, 10:] = 999
+        out_alt = splade_model(x_alt, attention_mask=mask)
 
     sparse_vec = out["sparse_vector"]
     assert sparse_vec.shape == (2, config.vocab_size), "SPLADE vector shape mismatch"
     assert torch.all(sparse_vec >= 0), "SPLADE weights must be non-negative"
+    assert torch.allclose(out["sparse_vector"], out_alt["sparse_vector"], atol=1e-5), "Pad positions leaked into SPLADE vector"
     print(" SPLADE Head test passed!")
 
 

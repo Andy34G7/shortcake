@@ -18,6 +18,7 @@ tokenizer.model
 # Model Checkpoints & Logs
 checkpoints/
 checkpoints_sft/
+checkpoints_splade/
 *.pt
 *.pth
 *.ckpt
