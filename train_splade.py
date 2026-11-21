@@ -170,7 +170,7 @@ def train_splade(
     lambda_q: float = 3e-4,
     lambda_d: float = 1e-4,
     flops_warmup_steps: int = 1000,
-    temperature: float = 0.05,
+    temperature: float = 1.0,
     use_suffix: bool = True,
     eval_interval: int = 250,
 ):
@@ -332,7 +332,7 @@ def main():
     parser.add_argument("--lambda_q", type=float, default=3e-4)
     parser.add_argument("--lambda_d", type=float, default=1e-4)
     parser.add_argument("--flops_warmup_steps", type=int, default=1000)
-    parser.add_argument("--temperature", type=float, default=0.05)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--no_suffix", action="store_true", help="Disable causal keyword suffix prompt.")
     parser.add_argument("--eval_interval", type=int, default=250)
     args = parser.parse_args()
