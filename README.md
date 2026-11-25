@@ -140,7 +140,7 @@ uv run python generate.py --checkpoint checkpoints/best_model.pt --prompt "def b
 
 ## SPLADE Backbone Adaptation (Experimental)
 
-`splade_head.py`, `train_splade.py`, and `eval_splade_baseline.py` contain a small experimental test exploring how `Shortcake`'s hybrid Mamba/Attention backbone adapts when used as a SPLADE sparse-retrieval encoder. Full document retrieval benchmarks and broader SPLADE comparisons are intended to live in a separate repository.
+`splade_head.py`, `train_splade.py`, and `eval_splade_baseline.py` contain an experimental SPLADE sparse-retrieval head and training loop for `Shortcake`'s hybrid Mamba/Attention backbone. Full multi-domain retrieval benchmarks (BEIR and CoIR), ablations, and distillation experiments live in [sprinkles](https://github.com/Andy34G7/sprinkles).
 
 ---
 
