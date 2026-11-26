@@ -97,6 +97,8 @@ class AttentionBlock(nn.Module):
         self,
         x: torch.Tensor,
         cache: Optional[Dict[str, torch.Tensor]] = None,
+        is_causal: bool = True,
+        attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         b, l, d = x.shape
         h = self.norm(x)
@@ -135,9 +137,20 @@ class AttentionBlock(nn.Module):
         # Scaled Dot Product Attention
         dropout_p = self.dropout if self.training else 0.0
         if past_k is None:
-            attn_out = F.scaled_dot_product_attention(
-                q, k, v, is_causal=True, dropout_p=dropout_p
-            )
+            if is_causal:
+                attn_out = F.scaled_dot_product_attention(
+                    q, k, v, is_causal=True, dropout_p=dropout_p
+                )
+            elif attention_mask is not None:
+                # Bidirectional attention with key-padding mask: (B, 1, 1, L) bool
+                pad_mask = attention_mask.to(dtype=torch.bool)[:, None, None, :]
+                attn_out = F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=pad_mask, is_causal=False, dropout_p=dropout_p
+                )
+            else:
+                attn_out = F.scaled_dot_product_attention(
+                    q, k, v, is_causal=False, dropout_p=dropout_p
+                )
         elif l == 1:
             # Single-token decode attends to all cached past keys + current key
             attn_out = F.scaled_dot_product_attention(
@@ -176,8 +189,33 @@ class MambaBlockWrapper(nn.Module):
         self,
         x: torch.Tensor,
         cache: Optional[Dict[str, torch.Tensor]] = None,
+        bidirectional: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
+        bwd_gate: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        x = x + self.mamba(self.norm(x), cache=cache)
+        h = self.norm(x)
+        fwd = self.mamba(h, cache=cache)
+        if bidirectional and cache is None:
+            if attention_mask is not None:
+                # Reverse only valid (non-pad) prefix per row so right-padding never pollutes backward SSM state
+                lengths = attention_mask.to(dtype=torch.long).sum(dim=1)
+                h_rev = torch.zeros_like(h)
+                for i in range(h.shape[0]):
+                    n = int(lengths[i].item())
+                    if n > 0:
+                        h_rev[i, :n] = h[i, :n].flip(0)
+                bwd_rev = self.mamba(h_rev, cache=None)
+                bwd = torch.zeros_like(bwd_rev)
+                for i in range(h.shape[0]):
+                    n = int(lengths[i].item())
+                    if n > 0:
+                        bwd[i, :n] = bwd_rev[i, :n].flip(0)
+            else:
+                bwd = self.mamba(h.flip(1), cache=None).flip(1)
+            gate = bwd_gate.to(dtype=bwd.dtype) if bwd_gate is not None else 1.0
+            x = x + fwd + gate * bwd
+        else:
+            x = x + fwd
         x = x + self.mlp(self.mlp_norm(x))
         return x
 
@@ -277,21 +315,31 @@ class Shortcake(nn.Module):
         compute_jepa: bool = False,
         cache: Optional[List[Dict[str, Any]]] = None,
         return_logits: bool = True,
+        bidirectional: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
+        bwd_gates: Optional[nn.ParameterList] = None,
     ) -> Dict[str, Any]:
         """
         input_ids: (B, L)
         targets: (B, L) optional ground truth token targets for Causal LM loss
         cache: Optional list of per-layer dicts returned by init_cache() for fast O(1) decode
         return_logits: Set False to skip lm_head projection (e.g., when using SPLADE head)
+        bidirectional: When True (cache must be None), runs bidirectional Attention + BiMamba SSM
         """
         b, l = input_ids.shape
         x = self.tok_embeddings(input_ids)
         x = self.drop(x)
 
         # Pass through interleaved backbone
+        mamba_idx = 0
         for i, layer in enumerate(self.layers):
             layer_cache = cache[i] if cache is not None else None
-            x = layer(x, cache=layer_cache)
+            if isinstance(layer, AttentionBlock):
+                x = layer(x, cache=layer_cache, is_causal=not bidirectional, attention_mask=attention_mask)
+            else:
+                gate = bwd_gates[mamba_idx] if (bwd_gates is not None and mamba_idx < len(bwd_gates)) else None
+                mamba_idx += 1
+                x = layer(x, cache=layer_cache, bidirectional=bidirectional, attention_mask=attention_mask, bwd_gate=gate)
 
         h = self.norm_f(x)  # Hidden representation (B, L, D)
 

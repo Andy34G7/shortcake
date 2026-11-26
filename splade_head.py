@@ -74,12 +74,28 @@ class SPLADESparseHead(nn.Module):
 class ShortcakeSPLADE(nn.Module):
     """Shortcake backbone equipped with a pre-trained-tied SPLADE sparse vector head."""
 
-    def __init__(self, backbone: Shortcake, tie_lm_head: bool = True, pad_token_id: int = 1):
+    def __init__(
+        self,
+        backbone: Shortcake,
+        tie_lm_head: bool = True,
+        pad_token_id: int = 1,
+        bidirectional: bool = False,
+    ):
         super().__init__()
         self.backbone = backbone
         self.pad_token_id = pad_token_id
+        self.bidirectional = bidirectional
         lm_weight = backbone.lm_head.weight if tie_lm_head else None
         self.splade_head = SPLADESparseHead(backbone.config, lm_head_weight=lm_weight)
+        if bidirectional:
+            from model import MambaBlockWrapper
+            n_mamba = sum(1 for layer in backbone.layers if isinstance(layer, MambaBlockWrapper))
+            # Zero-initialized residual gate per Mamba layer preserves pretrained causal reps at step 0
+            self.bwd_gates = nn.ParameterList(
+                [nn.Parameter(torch.zeros(backbone.config.d_model)) for _ in range(n_mamba)]
+            )
+        else:
+            self.bwd_gates = None
 
     def forward(
         self,
@@ -90,7 +106,13 @@ class ShortcakeSPLADE(nn.Module):
             attention_mask = input_ids.ne(self.pad_token_id)
 
         # Skip redundant backbone.lm_head matmul since SPLADE head computes vocabulary logits
-        outputs = self.backbone(input_ids, return_logits=False)
+        outputs = self.backbone(
+            input_ids,
+            return_logits=False,
+            bidirectional=self.bidirectional,
+            attention_mask=attention_mask,
+            bwd_gates=self.bwd_gates,
+        )
         h = outputs["hidden_states"]
         sparse_vector, flops_loss = self.splade_head(h, attention_mask=attention_mask)
         return {
